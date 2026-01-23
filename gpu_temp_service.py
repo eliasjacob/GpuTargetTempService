@@ -52,16 +52,10 @@ MIN_FAN_SPEED = 30
 MAX_FAN_SPEED = 100
 
 # Baseline fan curve: (temperature °C, fan speed %)
-# This provides gradual ramping regardless of target temperature
+# Idle speed (e.g. 30% @ 30°C) and max speed (e.g. 70% @ 90°C)
 BASELINE_CURVE = [
-    (40, 30),
-    (50, 35),
-    (60, 40),
-    (70, 50),
-    (75, 60),
-    (80, 70),
-    (85, 80),
-    (90, 95),
+    (35, 30),
+    (90, 70),
 ]
 
 

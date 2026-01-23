@@ -194,8 +194,9 @@ class GpuTempController:
         gpu.integral += Ki * error * INTERVAL
         gpu.integral = clamp(gpu.integral, INTEGRAL_MIN, INTEGRAL_MAX)
 
-        # Calculate final fan speed
+        # Calculate final fan speed (never drop below baseline)
         fan_speed = baseline + p_term + gpu.integral
+        fan_speed = max(fan_speed, baseline)
         fan_speed = clamp(fan_speed, MIN_FAN_SPEED, MAX_FAN_SPEED)
         fan_speed_int = int(round(fan_speed))
 

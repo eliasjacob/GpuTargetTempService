@@ -5,20 +5,24 @@ GPU Target Temperature Service
 Uses a smoothed PI controller with a baseline fan curve to maintain
 a target GPU temperature regardless of ambient conditions.
 
+Supports multiple GPUs - each GPU maintains independent PI state
+while sharing the same target temperature.
+
 Configuration is read from config.json in the same directory.
 """
 
 import json
-import os
 import signal
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pynvml import (
     nvmlInit,
     nvmlShutdown,
     nvmlDeviceGetHandleByIndex,
+    nvmlDeviceGetCount,
     nvmlDeviceGetTemperature,
     nvmlDeviceGetNumFans,
     nvmlDeviceSetFanSpeed_v2,
@@ -94,30 +98,55 @@ def clamp(value: float, min_val: float, max_val: float) -> float:
     return max(min_val, min(max_val, value))
 
 
+@dataclass
+class GpuState:
+    """Per-GPU state for the PI controller."""
+    index: int
+    handle: object
+    name: str
+    num_fans: int
+    smoothed_temp: float = None
+    integral: float = 0.0
+    last_fan_speed: int = 0
+
+
 class GpuTempController:
     def __init__(self, target_temp: float):
         self.target_temp = target_temp
-        self.smoothed_temp = None
-        self.integral = 0.0
-        self.handle = None
-        self.num_fans = 0
+        self.gpus: list[GpuState] = []
         self.running = True
 
     def initialize(self):
-        """Initialize NVML and get GPU handle."""
+        """Initialize NVML and discover all GPUs."""
         nvmlInit()
-        self.handle = nvmlDeviceGetHandleByIndex(0)
-        self.num_fans = nvmlDeviceGetNumFans(self.handle)
 
-        gpu_name = nvmlDeviceGetName(self.handle)
         driver_version = nvmlSystemGetDriverVersion()
+        gpu_count = nvmlDeviceGetCount()
 
         print(f"GPU Target Temperature Service started", flush=True)
         print(f"Driver: {driver_version}", flush=True)
-        print(f"GPU: {gpu_name}", flush=True)
-        print(f"Fans detected: {self.num_fans}", flush=True)
+        print(f"GPUs detected: {gpu_count}", flush=True)
         print(f"Target temperature: {self.target_temp}°C", flush=True)
         print(f"Sample interval: {INTERVAL}s, EMA alpha: {EMA_ALPHA}", flush=True)
+        print("-" * 60, flush=True)
+
+        # Initialize state for each GPU
+        for i in range(gpu_count):
+            handle = nvmlDeviceGetHandleByIndex(i)
+            name = nvmlDeviceGetName(handle)
+            num_fans = nvmlDeviceGetNumFans(handle)
+
+            gpu = GpuState(
+                index=i,
+                handle=handle,
+                name=name,
+                num_fans=num_fans,
+            )
+            self.gpus.append(gpu)
+
+            print(f"  GPU {i}: {name} ({num_fans} fan{'s' if num_fans != 1 else ''})", flush=True)
+
+        print("-" * 60, flush=True)
 
     def shutdown(self):
         """Clean shutdown of NVML."""
@@ -130,66 +159,85 @@ class GpuTempController:
         self.target_temp = new_target
         print(f"Target temperature updated to {new_target}°C", flush=True)
 
-    def set_fan_speed(self, speed: int):
-        """Set fan speed for all fans."""
-        for fan_idx in range(self.num_fans):
+    def set_fan_speed(self, gpu: GpuState, speed: int):
+        """Set fan speed for all fans on a GPU."""
+        for fan_idx in range(gpu.num_fans):
             try:
-                nvmlDeviceSetFanSpeed_v2(self.handle, fan_idx, speed)
+                nvmlDeviceSetFanSpeed_v2(gpu.handle, fan_idx, speed)
             except Exception as e:
-                print(f"Warning: Failed to set fan {fan_idx} speed: {e}", flush=True)
+                print(f"Warning: GPU {gpu.index} fan {fan_idx} control failed: {e}", flush=True)
 
-    def step(self) -> dict:
+    def step_gpu(self, gpu: GpuState) -> dict:
         """
-        Perform one control loop iteration.
+        Perform one control loop iteration for a single GPU.
         Returns a dict with current state for logging.
         """
         # Read current temperature
-        current_temp = nvmlDeviceGetTemperature(self.handle, NVML_TEMPERATURE_GPU)
+        current_temp = nvmlDeviceGetTemperature(gpu.handle, NVML_TEMPERATURE_GPU)
 
         # Apply EMA smoothing
-        if self.smoothed_temp is None:
-            self.smoothed_temp = float(current_temp)
+        if gpu.smoothed_temp is None:
+            gpu.smoothed_temp = float(current_temp)
         else:
-            self.smoothed_temp = (
-                EMA_ALPHA * current_temp + (1 - EMA_ALPHA) * self.smoothed_temp
+            gpu.smoothed_temp = (
+                EMA_ALPHA * current_temp + (1 - EMA_ALPHA) * gpu.smoothed_temp
             )
 
         # Get baseline fan speed from curve
-        baseline = get_baseline_fan_speed(self.smoothed_temp)
+        baseline = get_baseline_fan_speed(gpu.smoothed_temp)
 
         # Calculate error (positive = too hot, negative = too cold)
-        error = self.smoothed_temp - self.target_temp
+        error = gpu.smoothed_temp - self.target_temp
 
         # PI controller
         p_term = Kp * error
-        self.integral += Ki * error * INTERVAL
-        self.integral = clamp(self.integral, INTEGRAL_MIN, INTEGRAL_MAX)
+        gpu.integral += Ki * error * INTERVAL
+        gpu.integral = clamp(gpu.integral, INTEGRAL_MIN, INTEGRAL_MAX)
 
         # Calculate final fan speed
-        fan_speed = baseline + p_term + self.integral
+        fan_speed = baseline + p_term + gpu.integral
         fan_speed = clamp(fan_speed, MIN_FAN_SPEED, MAX_FAN_SPEED)
         fan_speed_int = int(round(fan_speed))
 
         # Apply fan speed
-        self.set_fan_speed(fan_speed_int)
+        self.set_fan_speed(gpu, fan_speed_int)
+        gpu.last_fan_speed = fan_speed_int
 
         return {
+            "gpu_index": gpu.index,
             "current_temp": current_temp,
-            "smoothed_temp": round(self.smoothed_temp, 1),
+            "smoothed_temp": round(gpu.smoothed_temp, 1),
             "target_temp": self.target_temp,
             "error": round(error, 1),
             "baseline": round(baseline, 1),
             "p_term": round(p_term, 1),
-            "integral": round(self.integral, 1),
+            "integral": round(gpu.integral, 1),
             "fan_speed": fan_speed_int,
         }
+
+    def step(self) -> list[dict]:
+        """
+        Perform one control loop iteration for all GPUs.
+        Returns a list of state dicts for logging.
+        """
+        results = []
+        for gpu in self.gpus:
+            try:
+                state = self.step_gpu(gpu)
+                results.append(state)
+            except Exception as e:
+                print(f"Error controlling GPU {gpu.index}: {e}", flush=True)
+        return results
 
     def run(self):
         """Main control loop."""
         while self.running:
-            try:
-                state = self.step()
+            states = self.step()
+
+            # Log all GPU states
+            for state in states:
                 print(
+                    f"GPU {state['gpu_index']}: "
                     f"Temp: {state['current_temp']}°C (smoothed: {state['smoothed_temp']}°C) | "
                     f"Target: {state['target_temp']}°C | "
                     f"Error: {state['error']:+.1f}°C | "
@@ -197,8 +245,6 @@ class GpuTempController:
                     f"P: {state['p_term']:+.1f}, I: {state['integral']:+.1f})",
                     flush=True,
                 )
-            except Exception as e:
-                print(f"Error in control loop: {e}", flush=True)
 
             time.sleep(INTERVAL)
 

@@ -78,20 +78,31 @@ prompt_target_temp() {
             return 0
         fi
 
-        # Validate input is a number between 50 and 95
-        if [[ "$input_temp" =~ ^[0-9]+$ ]] && [ "$input_temp" -ge 50 ] && [ "$input_temp" -le 95 ]; then
+        # Validate input is a number up to 95
+        if [[ "$input_temp" =~ ^[0-9]+$ ]] && [ "$input_temp" -ge 1 ] && [ "$input_temp" -le 95 ]; then
             echo "$input_temp"
             return 0
         else
-            echo "      Please enter a valid temperature between 50 and 95°C."
+            echo "      Please enter a valid temperature between 1 and 95°C."
         fi
     done
 }
 
+# Default fan curve: [temperature, fan_speed] pairs
+DEFAULT_FAN_CURVE='[[35, 30], [90, 70]]'
+
 # Create or update config file
 update_config() {
     local target_temp="$1"
-    echo "{\"target_temp\": $target_temp}" > "$CONFIG_FILE"
+
+    # Preserve existing fan_curve if present, otherwise use default
+    if [ -f "$CONFIG_FILE" ]; then
+        existing_curve=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(json.dumps(c.get('fan_curve', $DEFAULT_FAN_CURVE)))" 2>/dev/null || echo "$DEFAULT_FAN_CURVE")
+    else
+        existing_curve="$DEFAULT_FAN_CURVE"
+    fi
+
+    echo "{\"target_temp\": $target_temp, \"fan_curve\": $existing_curve}" > "$CONFIG_FILE"
     echo "      Configuration saved: target_temp = ${target_temp}°C"
 }
 

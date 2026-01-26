@@ -51,34 +51,66 @@ INTEGRAL_MAX = 20
 MIN_FAN_SPEED = 30
 MAX_FAN_SPEED = 100
 
-# Baseline fan curve: (temperature °C, fan speed %)
-# Idle speed (e.g. 30% @ 30°C) and max speed (e.g. 70% @ 90°C)
-BASELINE_CURVE = [
-    (35, 30),
-    (90, 70),
+# Default baseline fan curve: [temperature °C, fan speed %]
+# Used when fan_curve is not specified in config.json
+DEFAULT_BASELINE_CURVE = [
+    [35, 30],
+    [90, 70],
 ]
 
 
-def get_baseline_fan_speed(temp: float) -> float:
+def parse_fan_curve(config: dict) -> list:
+    """
+    Parse fan curve from config, returning default if not present or invalid.
+    Expected format: [[temp1, speed1], [temp2, speed2], ...]
+    """
+    if "fan_curve" not in config:
+        return DEFAULT_BASELINE_CURVE
+
+    curve = config["fan_curve"]
+
+    # Validate structure
+    if not isinstance(curve, list) or len(curve) < 2:
+        print("Warning: Invalid fan_curve format, using default", flush=True)
+        return DEFAULT_BASELINE_CURVE
+
+    # Validate each point and sort by temperature
+    try:
+        validated = []
+        for point in curve:
+            if not isinstance(point, list) or len(point) != 2:
+                raise ValueError("Each point must be [temp, speed]")
+            temp, speed = float(point[0]), float(point[1])
+            if not (0 <= temp <= 100) or not (0 <= speed <= 100):
+                raise ValueError("Values must be between 0 and 100")
+            validated.append([temp, speed])
+        validated.sort(key=lambda p: p[0])
+        return validated
+    except (TypeError, ValueError) as e:
+        print(f"Warning: Invalid fan_curve ({e}), using default", flush=True)
+        return DEFAULT_BASELINE_CURVE
+
+
+def get_baseline_fan_speed(temp: float, curve: list) -> float:
     """
     Interpolate baseline fan speed from the curve.
     Temperatures below/above the curve are clamped to the endpoints.
     """
-    if temp <= BASELINE_CURVE[0][0]:
-        return BASELINE_CURVE[0][1]
-    if temp >= BASELINE_CURVE[-1][0]:
-        return BASELINE_CURVE[-1][1]
+    if temp <= curve[0][0]:
+        return curve[0][1]
+    if temp >= curve[-1][0]:
+        return curve[-1][1]
 
     # Find the two points to interpolate between
-    for i in range(len(BASELINE_CURVE) - 1):
-        t1, f1 = BASELINE_CURVE[i]
-        t2, f2 = BASELINE_CURVE[i + 1]
+    for i in range(len(curve) - 1):
+        t1, f1 = curve[i]
+        t2, f2 = curve[i + 1]
         if t1 <= temp <= t2:
             # Linear interpolation
             ratio = (temp - t1) / (t2 - t1)
             return f1 + ratio * (f2 - f1)
 
-    return BASELINE_CURVE[-1][1]
+    return curve[-1][1]
 
 
 def load_config() -> dict:
@@ -105,8 +137,9 @@ class GpuState:
 
 
 class GpuTempController:
-    def __init__(self, target_temp: float):
+    def __init__(self, target_temp: float, baseline_curve: list):
         self.target_temp = target_temp
+        self.baseline_curve = baseline_curve
         self.gpus: list[GpuState] = []
         self.running = True
 
@@ -117,10 +150,12 @@ class GpuTempController:
         driver_version = nvmlSystemGetDriverVersion()
         gpu_count = nvmlDeviceGetCount()
 
+        curve_str = ", ".join(f"{int(t)}°C:{int(s)}%" for t, s in self.baseline_curve)
         print(f"GPU Target Temperature Service started", flush=True)
         print(f"Driver: {driver_version}", flush=True)
         print(f"GPUs detected: {gpu_count}", flush=True)
         print(f"Target temperature: {self.target_temp}°C", flush=True)
+        print(f"Fan curve: [{curve_str}]", flush=True)
         print(f"Sample interval: {INTERVAL}s, EMA alpha: {EMA_ALPHA}", flush=True)
         print("-" * 60, flush=True)
 
@@ -148,10 +183,12 @@ class GpuTempController:
         print("Shutting down GPU temperature service...", flush=True)
         nvmlShutdown()
 
-    def update_target(self, new_target: float):
-        """Update target temperature (for config reload)."""
+    def update_config(self, new_target: float, new_curve: list):
+        """Update target temperature and fan curve (for config reload)."""
         self.target_temp = new_target
-        print(f"Target temperature updated to {new_target}°C", flush=True)
+        self.baseline_curve = new_curve
+        curve_str = ", ".join(f"{int(t)}°C:{int(s)}%" for t, s in new_curve)
+        print(f"Config reloaded: target={new_target}°C, fan_curve=[{curve_str}]", flush=True)
 
     def set_fan_speed(self, gpu: GpuState, speed: int):
         """Set fan speed for all fans on a GPU."""
@@ -178,7 +215,7 @@ class GpuTempController:
             )
 
         # Get baseline fan speed from curve
-        baseline = get_baseline_fan_speed(gpu.smoothed_temp)
+        baseline = get_baseline_fan_speed(gpu.smoothed_temp, self.baseline_curve)
 
         # Calculate error (positive = too hot, negative = too cold)
         error = gpu.smoothed_temp - self.target_temp
@@ -249,6 +286,7 @@ def main():
     try:
         config = load_config()
         target_temp = float(config["target_temp"])
+        baseline_curve = parse_fan_curve(config)
     except FileNotFoundError:
         print(f"Error: Config file not found at {CONFIG_FILE}", file=sys.stderr)
         sys.exit(1)
@@ -257,7 +295,7 @@ def main():
         sys.exit(1)
 
     # Create controller
-    controller = GpuTempController(target_temp)
+    controller = GpuTempController(target_temp, baseline_curve)
 
     # Set up signal handlers for graceful shutdown
     def signal_handler(signum, frame):
@@ -273,7 +311,9 @@ def main():
         print("Received SIGHUP, reloading config...", flush=True)
         try:
             config = load_config()
-            controller.update_target(float(config["target_temp"]))
+            new_target = float(config["target_temp"])
+            new_curve = parse_fan_curve(config)
+            controller.update_config(new_target, new_curve)
         except Exception as e:
             print(f"Error reloading config: {e}", flush=True)
 

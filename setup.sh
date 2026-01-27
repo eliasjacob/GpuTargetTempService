@@ -150,14 +150,10 @@ main() {
         echo ""
         new_target=$(prompt_target_temp "$current_target")
 
-        if [ "$new_target" != "$current_target" ]; then
-            update_config "$new_target"
-            echo "[4/4] Reloading service configuration..."
-            sudo systemctl reload "$SERVICE_NAME"
-            echo "      Service reloaded with new target temperature."
-        else
-            echo "[4/4] No changes needed."
-        fi
+        update_config "$new_target"
+        echo "[4/4] Reloading service configuration..."
+        sudo systemctl reload "$SERVICE_NAME"
+        echo "      Service reloaded."
 
     elif systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}.service"; then
         # Service exists but is not running

@@ -41,7 +41,25 @@ Enter a new temperature when prompted. The service will reload without restart.
 Config is stored in `config.json`:
 
 ```json
-{"target_temp": 80}
+{
+  "target_temp": 80,
+  "fan_curve": [[35, 30], [90, 70]]
+}
+```
+
+### Target Temperature
+
+The temperature (in °C) that the service will try to maintain. Valid range: 1-95°C.
+
+### Fan Curve (Optional)
+
+The baseline fan curve as `[temperature, fan_speed]` pairs. The service interpolates between these points to determine the minimum fan speed at any given temperature. The PI controller adjusts on top of this baseline.
+
+If not specified, the default curve `[[35, 30], [90, 70]]` is used (30% fan at 35°C, 70% fan at 90°C).
+
+Changes to the config file are applied when you run `./setup.sh` again, or simply reload the service:
+```bash
+sudo systemctl reload gpu-target-temp
 ```
 
 ## License

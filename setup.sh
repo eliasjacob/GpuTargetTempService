@@ -94,7 +94,7 @@ prompt_target_temp() {
 }
 
 # Default fan curve: [temperature, fan_speed] pairs
-DEFAULT_FAN_CURVE='[[35, 30], [90, 100]]'
+DEFAULT_FAN_CURVE='[[35, 30], [85, 100]]'
 
 # Create or update config file
 update_config() {

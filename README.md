@@ -52,7 +52,7 @@ Config is stored in `config.json`. The same `target_temp` and `fan_curve` are ap
 ```json
 {
   "target_temp": 80,
-  "fan_curve": [[35, 30], [90, 100]]
+  "fan_curve": [[35, 30], [85, 100]]
 }
 ```
 
@@ -64,7 +64,7 @@ The temperature (in °C) that the service will try to maintain. Valid range: 1-9
 
 The baseline fan curve as `[temperature, fan_speed]` pairs. The service interpolates between these points to determine the minimum fan speed at any given temperature. The PI controller adjusts on top of this baseline.
 
-The example above ramps from 30% fan at 35°C to 100% fan at 90°C — an aggressive curve that gives the controller plenty of headroom to hold the target temperature. This is also the built-in default used when `fan_curve` is omitted from `config.json`.
+The example above ramps from 30% fan at 35°C to 100% fan at 85°C — an aggressive curve that gives the controller plenty of headroom to hold the target temperature. This is also the built-in default used when `fan_curve` is omitted from `config.json`.
 
 Changes to the config file are applied when you run `./setup.sh` again, or simply reload the service:
 ```bash
@@ -76,7 +76,7 @@ sudo systemctl reload gpu-target-temp
 This is a fork of [m0nsky/GpuTargetTempService](https://github.com/m0nsky/GpuTargetTempService) — all credit for the original PI controller, fan-curve design, and systemd packaging goes to [@m0nsky](https://github.com/m0nsky). This fork adds:
 
 - `uv`-based dependency management (`pyproject.toml` + `uv.lock`) in place of the original `venv` + `pip` setup
-- A more aggressive default fan curve (`[[35, 30], [90, 100]]`)
+- A more aggressive default fan curve (`[[35, 30], [85, 100]]`)
 
 The "Why" section above is preserved from the upstream README.
 

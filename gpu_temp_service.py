@@ -38,6 +38,7 @@ CONFIG_FILE = SCRIPT_DIR / "config.json"
 # Timing
 INTERVAL = 3  # seconds between samples
 EMA_ALPHA = 0.15  # smoothing factor (~40 second effective window)
+LOG_HEARTBEAT_INTERVAL = 60  # seconds; emit a log line at least this often per GPU
 
 # PI Controller gains
 Kp = 2.0  # Proportional gain: how aggressively to respond to current error
@@ -55,7 +56,7 @@ MAX_FAN_SPEED = 100
 # Used when fan_curve is not specified in config.json
 DEFAULT_BASELINE_CURVE = [
     [35, 30],
-    [90, 100],
+    [85, 100],
 ]
 
 
@@ -134,6 +135,8 @@ class GpuState:
     smoothed_temp: float = None
     integral: float = 0.0
     last_fan_speed: int = 0
+    last_logged_speed: int = -1  # sentinel ensures first tick logs
+    last_log_time: float = 0.0
 
 
 class GpuTempController:
@@ -265,9 +268,16 @@ class GpuTempController:
         """Main control loop."""
         while self.running:
             states = self.step()
+            now = time.monotonic()
 
-            # Log all GPU states
             for state in states:
+                gpu = self.gpus[state["gpu_index"]]
+                speed_changed = state["fan_speed"] != gpu.last_logged_speed
+                heartbeat_due = (now - gpu.last_log_time) >= LOG_HEARTBEAT_INTERVAL
+
+                if not (speed_changed or heartbeat_due):
+                    continue
+
                 print(
                     f"GPU {state['gpu_index']}: "
                     f"Temp: {state['current_temp']}°C (smoothed: {state['smoothed_temp']}°C) | "
@@ -277,6 +287,8 @@ class GpuTempController:
                     f"P: {state['p_term']:+.1f}, I: {state['integral']:+.1f})",
                     flush=True,
                 )
+                gpu.last_logged_speed = state["fan_speed"]
+                gpu.last_log_time = now
 
             time.sleep(INTERVAL)
 

@@ -71,6 +71,15 @@ Changes to the config file are applied when you run `./setup.sh` again, or simpl
 sudo systemctl reload gpu-target-temp
 ```
 
+## Credits
+
+This is a fork of [m0nsky/GpuTargetTempService](https://github.com/m0nsky/GpuTargetTempService) — all credit for the original PI controller, fan-curve design, and systemd packaging goes to [@m0nsky](https://github.com/m0nsky). This fork adds:
+
+- `uv`-based dependency management (`pyproject.toml` + `uv.lock`) in place of the original `venv` + `pip` setup
+- A more aggressive default fan curve (`[[35, 30], [90, 100]]`)
+
+The "Why" section above is preserved from the upstream README.
+
 ## License
 
-MIT
+MIT (inherited from the upstream project)

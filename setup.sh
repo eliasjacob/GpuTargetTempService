@@ -3,15 +3,15 @@
 # GPU Target Temperature Service - Setup Script
 #
 # This script:
-# - Creates a Python virtual environment (if needed)
-# - Installs nvidia-ml-py (if needed)
+# - Ensures uv is available
+# - Syncs the Python environment (.venv) from pyproject.toml
 # - Sets up or reconfigures the systemd service
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="$SCRIPT_DIR/venv"
+VENV_DIR="$SCRIPT_DIR/.venv"
 SERVICE_NAME="gpu-target-temp"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
@@ -31,31 +31,36 @@ check_sudo() {
     fi
 }
 
-# Create virtual environment if it doesn't exist
-setup_venv() {
-    if [ ! -d "$VENV_DIR" ]; then
-        echo "[1/4] Creating virtual environment..."
-        python3 -m venv "$VENV_DIR"
-        echo "      Virtual environment created at $VENV_DIR"
-    else
-        echo "[1/4] Virtual environment already exists."
+# Locate uv, installing it for the current user if missing
+ensure_uv() {
+    if command -v uv >/dev/null 2>&1; then
+        UV_BIN="$(command -v uv)"
+        return
+    fi
+
+    if [ -x "$HOME/.local/bin/uv" ]; then
+        UV_BIN="$HOME/.local/bin/uv"
+        return
+    fi
+
+    echo "      uv not found, installing to ~/.local/bin..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    UV_BIN="$HOME/.local/bin/uv"
+
+    if [ ! -x "$UV_BIN" ]; then
+        echo "Error: uv installation failed. Install it manually from https://docs.astral.sh/uv/" >&2
+        exit 1
     fi
 }
 
-# Install nvidia-ml-py if not already installed
-install_dependencies() {
-    echo "[2/4] Checking dependencies..."
-    source "$VENV_DIR/bin/activate"
-
-    if ! python3 -c "import pynvml" 2>/dev/null; then
-        echo "      Installing nvidia-ml-py..."
-        pip install --quiet nvidia-ml-py
-        echo "      nvidia-ml-py installed."
-    else
-        echo "      nvidia-ml-py already installed."
-    fi
-
-    deactivate
+# Sync the project environment using uv
+setup_env() {
+    echo "[1/3] Syncing Python environment with uv..."
+    ensure_uv
+    # Pin the venv to ./.venv so the systemd unit has a stable path,
+    # regardless of any user-level UV_PROJECT_ENVIRONMENT override.
+    (cd "$SCRIPT_DIR" && UV_PROJECT_ENVIRONMENT="$VENV_DIR" "$UV_BIN" sync --quiet)
+    echo "      Environment ready at $VENV_DIR"
 }
 
 # Prompt for target temperature
@@ -89,7 +94,7 @@ prompt_target_temp() {
 }
 
 # Default fan curve: [temperature, fan_speed] pairs
-DEFAULT_FAN_CURVE='[[35, 30], [90, 70]]'
+DEFAULT_FAN_CURVE='[[35, 30], [90, 100]]'
 
 # Create or update config file
 update_config() {
@@ -134,13 +139,12 @@ WantedBy=multi-user.target"
 # Main setup logic
 main() {
     check_sudo
-    setup_venv
-    install_dependencies
+    setup_env
 
     # Check if service already exists and is active
     if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         # Service exists and is running
-        echo "[3/4] Service is currently running."
+        echo "[2/3] Service is currently running."
 
         # Get current target temp
         if [ -f "$CONFIG_FILE" ]; then
@@ -151,13 +155,13 @@ main() {
         new_target=$(prompt_target_temp "$current_target")
 
         update_config "$new_target"
-        echo "[4/4] Reloading service configuration..."
+        echo "[3/3] Reloading service configuration..."
         sudo systemctl reload "$SERVICE_NAME"
         echo "      Service reloaded."
 
     elif systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}.service"; then
         # Service exists but is not running
-        echo "[3/4] Service exists but is not running."
+        echo "[2/3] Service exists but is not running."
 
         # Get current target temp if config exists
         current_target=""
@@ -169,19 +173,19 @@ main() {
         new_target=$(prompt_target_temp "$current_target")
         update_config "$new_target"
 
-        echo "[4/4] Starting service..."
+        echo "[3/3] Starting service..."
         sudo systemctl start "$SERVICE_NAME"
         echo "      Service started."
 
     else
         # Service doesn't exist - fresh install
-        echo "[3/4] Setting up new service..."
+        echo "[2/3] Setting up new service..."
         echo ""
 
         target_temp=$(prompt_target_temp "")
         update_config "$target_temp"
 
-        echo "[4/4] Installing systemd service..."
+        echo "[3/3] Installing systemd service..."
         create_service_file
 
         sudo systemctl daemon-reload

@@ -1,0 +1,9 @@
+[project]
+name = "gpu-target-temp-service"
+version = "0.1.0"
+description = "Systemd service that maintains NVIDIA GPUs at a target temperature using a PI controller."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "nvidia-ml-py>=12.0",
+]

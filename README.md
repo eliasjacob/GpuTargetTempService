@@ -10,21 +10,30 @@ I recently purchased a RTX Pro 6000 Blackwell Max-Q, and noticed it would target
 
 - Linux (I'm personally using this on my Proxmox VE 9.1.4 homelab, inside an Ubuntu 24.04 Server VM, minimal install)
 - Compatible driver (I've tested both `nvidia-driver-580-open` and `nvidia-driver-590-open`)
+- [uv](https://docs.astral.sh/uv/) (the setup script will install it for the current user if missing)
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/yourusername/GpuTargetTempService.git
+git clone https://github.com/eliasjacob/GpuTargetTempService.git
 cd GpuTargetTempService
 chmod +x setup.sh
 ./setup.sh
 ```
 
 The setup script will:
-1. Create a Python virtual environment
-2. Install nvidia-ml-py
+1. Ensure `uv` is installed
+2. Sync the Python environment (`.venv`) from `pyproject.toml`
 3. Prompt for your target temperature
 4. Install and start the systemd service
+
+To manage dependencies manually:
+
+```bash
+uv sync              # install/update dependencies into .venv
+uv add <package>     # add a new dependency
+uv run gpu_temp_service.py   # run the service against the synced env
+```
 
 ## Changing Target Temperature
 
@@ -38,12 +47,12 @@ Enter a new temperature when prompted. The service will reload without restart.
 
 ## Configuration
 
-Config is stored in `config.json`:
+Config is stored in `config.json`. The same `target_temp` and `fan_curve` are applied to **every** NVIDIA GPU detected on the system (each GPU runs its own independent PI controller against the shared target).
 
 ```json
 {
   "target_temp": 80,
-  "fan_curve": [[35, 30], [90, 70]]
+  "fan_curve": [[35, 30], [90, 100]]
 }
 ```
 
@@ -55,7 +64,7 @@ The temperature (in °C) that the service will try to maintain. Valid range: 1-9
 
 The baseline fan curve as `[temperature, fan_speed]` pairs. The service interpolates between these points to determine the minimum fan speed at any given temperature. The PI controller adjusts on top of this baseline.
 
-If not specified, the default curve `[[35, 30], [90, 70]]` is used (30% fan at 35°C, 70% fan at 90°C).
+The example above ramps from 30% fan at 35°C to 100% fan at 90°C — an aggressive curve that gives the controller plenty of headroom to hold the target temperature. This is also the built-in default used when `fan_curve` is omitted from `config.json`.
 
 Changes to the config file are applied when you run `./setup.sh` again, or simply reload the service:
 ```bash

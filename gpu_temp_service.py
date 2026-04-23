@@ -55,7 +55,7 @@ MAX_FAN_SPEED = 100
 # Used when fan_curve is not specified in config.json
 DEFAULT_BASELINE_CURVE = [
     [35, 30],
-    [90, 70],
+    [90, 100],
 ]
 
 
